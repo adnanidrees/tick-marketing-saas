@@ -1,29 +1,33 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-/**
- * Middleware policy:
- * - Only protect /app routes (UI).
- * - Never redirect /api routes from middleware. API routes should return 401/403 from the handler layer.
- */
 export function middleware(req: NextRequest) {
-  const { pathname, search } = req.nextUrl;
+  const { pathname } = req.nextUrl;
 
-  // Protect app shell
-  if (pathname.startsWith("/app")) {
-    const token = req.cookies.get("tick_session")?.value;
+  if (
+    pathname.startsWith("/api") ||
+    pathname.startsWith("/_next") ||
+    pathname === "/favicon.ico"
+  ) {
+    return NextResponse.next();
+  }
 
-    if (!token) {
-      const url = req.nextUrl.clone();
-      url.pathname = "/login";
-      url.searchParams.set("next", pathname + (search ?? ""));
-      return NextResponse.redirect(url);
-    }
+  if (!pathname.startsWith("/app")) {
+    return NextResponse.next();
+  }
+
+  const token = req.cookies.get("tick_session")?.value;
+
+  if (!token) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/login";
+    url.searchParams.set("next", pathname);
+    return NextResponse.redirect(url);
   }
 
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ["/app/:path*"],
+  matcher: ["/app/:path*"]
 };
