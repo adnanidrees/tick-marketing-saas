@@ -3,6 +3,28 @@ import type { NextRequest } from "next/server";
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+
+  // ✅ Always allow Next internal + API routes
+  if (
+    pathname.startsWith("/api") ||
+    pathname.startsWith("/_next") ||
+    pathname.startsWith("/favicon.ico")
+  ) {
+    return NextResponse.next();
+  }
+
+  // ...your existing auth logic below (redirect to /login etc.)
+  return NextResponse.next();
+}
+
+export const config = {
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+};
+
+
+
+export function middleware(req: NextRequest) {
+  const { pathname } = req.nextUrl;
   const isApp = pathname.startsWith("/app");
   const isApi = pathname.startsWith("/api");
   const isPublic = pathname.startsWith("/login") || pathname === "/" || pathname.startsWith("/_next");
