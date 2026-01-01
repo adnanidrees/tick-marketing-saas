@@ -8,8 +8,9 @@ export const metadata: Metadata = {
 
 export default function PublicLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-white text-black">{children}</body>
-    </html>
+export default function PublicLayout({ children }: { children: React.ReactNode }) {
+  return <div className="min-h-screen bg-white text-black">{children}</div>;
+}
+
   );
 }
