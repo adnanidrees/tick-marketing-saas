@@ -17,20 +17,21 @@ const MODULES = [
 ];
 
 async function main() {
-  // ✅ Seed admin now controlled by env
+  // ✅ Seed admin controlled by env
   const email = process.env.SEED_ADMIN_EMAIL || "admin@tick.com";
-const password = process.env.SEED_ADMIN_PASSWORD || "Admin@12345";
+  const password = process.env.SEED_ADMIN_PASSWORD || "Admin@12345";
 
-if (process.env.NODE_ENV === "production" && password === "Admin@12345") {
-  throw new Error("Refusing to seed with default password in production. Set SEED_ADMIN_PASSWORD.");
-}
+  if (process.env.NODE_ENV === "production" && password === "Admin@12345") {
+    throw new Error(
+      "Refusing to seed with default password in production. Set SEED_ADMIN_PASSWORD."
+    );
+  }
 
   const passwordHash = await bcrypt.hash(password, 12);
 
   const admin = await prisma.user.upsert({
     where: { email },
     update: {
-      // password rotation possible (when you re-run seed with new password)
       passwordHash,
       globalRole: GlobalRole.SUPER_ADMIN,
       name: "Super Admin",
@@ -53,7 +54,11 @@ if (process.env.NODE_ENV === "production" && password === "Admin@12345") {
   await prisma.membership.upsert({
     where: { userId_workspaceId: { userId: admin.id, workspaceId: ws.id } },
     update: { role: WorkspaceRole.CLIENT_ADMIN },
-    create: { userId: admin.id, workspaceId: ws.id, role: WorkspaceRole.CLIENT_ADMIN },
+    create: {
+      userId: admin.id,
+      workspaceId: ws.id,
+      role: WorkspaceRole.CLIENT_ADMIN,
+    },
   });
 
   // Enable core modules for demo
@@ -65,10 +70,9 @@ if (process.env.NODE_ENV === "production" && password === "Admin@12345") {
     });
   }
 
-console.log("Seed complete:");
-console.log("Admin:", admin?.email ?? email ?? "(admin created)");
-console.log("Workspace:", (ws as any)?.name ?? (ws as any)?.slug ?? (ws as any)?.id ?? "(workspace created)");
-
+  console.log("Seed complete:");
+  console.log("Admin:", admin.email);
+  console.log("Workspace:", ws.slug);
 }
 
 main()
@@ -79,6 +83,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-console.log("Seed complete:");
-console.log("Admin:", admin?.email ?? email ?? "(admin created)");
-console.log("Workspace:", (ws as any)?.name ?? (ws as any)?.slug ?? (ws as any)?.id ?? "(workspace created)");
