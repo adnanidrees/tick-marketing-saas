@@ -66,8 +66,8 @@ if (process.env.NODE_ENV === "production" && password === "Admin@12345") {
   }
 
 console.log("Seed complete:");
-console.log("Admin:", admin?.email ?? "(no admin var)");
-console.log("Workspace:", ws?.name ?? ws?.id ?? "(no workspace var)");
+console.log("Admin:", admin?.email ?? email ?? "(admin created)");
+console.log("Workspace:", (ws as any)?.name ?? (ws as any)?.slug ?? (ws as any)?.id ?? "(workspace created)");
 
 }
 
