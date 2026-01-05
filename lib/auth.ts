@@ -1,34 +1,36 @@
-import { NextResponse } from "next/server";
+// lib/auth.ts
+import "server-only";
+
 import { cookies } from "next/headers";
+import { NextResponse } from "next/server";
+import { redirect } from "next/navigation";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 
-export const SESSION_COOKIE = "tick_session";
-export const WORKSPACE_COOKIE = "tick_workspace";
+const SESSION_COOKIE = "tick_session";
+const WORKSPACE_COOKIE = "tick_workspace";
 
+/** Standard JSON error helper */
 export function jsonError(message: string, status = 400) {
   return NextResponse.json({ ok: false, error: message }, { status });
 }
 
+/** Password helpers */
 export async function hashPassword(password: string) {
   const salt = await bcrypt.genSalt(10);
   return bcrypt.hash(password, salt);
 }
-
 export async function verifyPassword(password: string, hash: string) {
   return bcrypt.compare(password, hash);
 }
 
-export function getSessionToken() {
-  return cookies().get(SESSION_COOKIE)?.value || null;
-}
-
+/** Cookie helpers */
 export function setSessionCookie(token: string, expiresAt: Date) {
   cookies().set(SESSION_COOKIE, token, {
     httpOnly: true,
+    secure: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
     path: "/",
     expires: expiresAt,
   });
@@ -37,8 +39,8 @@ export function setSessionCookie(token: string, expiresAt: Date) {
 export function clearSessionCookie() {
   cookies().set(SESSION_COOKIE, "", {
     httpOnly: true,
+    secure: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
     path: "/",
     expires: new Date(0),
   });
@@ -47,113 +49,102 @@ export function clearSessionCookie() {
 export function setWorkspaceCookie(workspaceId: string) {
   cookies().set(WORKSPACE_COOKIE, workspaceId, {
     httpOnly: true,
+    secure: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
     path: "/",
-    // workspace selection long-lived
-    maxAge: 60 * 60 * 24 * 30, // 30 days
+    // workspace cookie long-lived
+    expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365),
   });
 }
 
 export function clearWorkspaceCookie() {
   cookies().set(WORKSPACE_COOKIE, "", {
     httpOnly: true,
+    secure: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
     path: "/",
     expires: new Date(0),
   });
 }
 
-export async function createSession(userId: string) {
-  const token = crypto.randomBytes(32).toString("hex");
-  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7); // 7 days
+export function getSessionToken() {
+  return cookies().get(SESSION_COOKIE)?.value || null;
+}
 
+export function getWorkspaceIdFromCookie() {
+  return cookies().get(WORKSPACE_COOKIE)?.value || null;
+}
+
+/** Session helpers (Prisma) */
+export async function createSession(userId: string) {
+  const token = crypto.randomBytes(48).toString("hex");
+  const days = Number(process.env.SESSION_DAYS || 7);
+  const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+
+  // IMPORTANT:
+  // Your Prisma model MUST have a "session" (or "Session") with fields:
+  // token (unique), userId, expiresAt
   const session = await prisma.session.create({
-    data: {
-      token,
-      userId,
-      expiresAt,
-    },
+    data: { token, userId, expiresAt },
   });
 
-  return session;
+  return { token: session.token, expiresAt: session.expiresAt };
 }
 
 export async function destroySession(token: string) {
+  // safe delete
   await prisma.session.deleteMany({ where: { token } });
 }
 
+/** Require user by session cookie */
 export async function requireAuth() {
   const token = getSessionToken();
-  if (!token) return null;
+  if (!token) {
+    // for API callers:
+    // return null and let caller handle, but to match your usage we throw:
+    throw new Error("UNAUTHORIZED");
+  }
 
   const session = await prisma.session.findUnique({
     where: { token },
     include: { user: true },
   });
 
-  if (!session) return null;
-  if (session.expiresAt.getTime() <= Date.now()) return null;
+  if (!session) throw new Error("UNAUTHORIZED");
+  if (session.expiresAt.getTime() < Date.now()) {
+    // expired session cleanup
+    await prisma.session.deleteMany({ where: { token } });
+    throw new Error("UNAUTHORIZED");
+  }
 
-  return session.user;
+  return { user: session.user, session };
 }
 
-export type WorkspaceContext = {
-  user: Awaited<ReturnType<typeof requireAuth>>;
-  workspaceId: string;
-  memberships: Array<{
-    id: string;
-    role: any;
-    workspaceId: string;
-    workspace: { id: string; name: string; slug: string };
-  }>;
-  selectedMembership: {
-    id: string;
-    role: any;
-    workspaceId: string;
-    workspace: { id: string; name: string; slug: string };
-  };
-};
+/**
+ * Workspace context:
+ * - reads workspace cookie
+ * - if missing and user has exactly 1 membership -> auto set
+ * - if missing and multiple -> redirect to select-workspace
+ */
+export async function requireWorkspaceContext() {
+  const { user } = await requireAuth();
 
-export async function requireWorkspaceContext(): Promise<WorkspaceContext | null> {
-  const user = await requireAuth();
-  if (!user) return null;
+  let workspaceId = getWorkspaceIdFromCookie();
 
-  const workspaceId = cookies().get(WORKSPACE_COOKIE)?.value;
-  if (!workspaceId) return null;
+  if (!workspaceId) {
+    const memberships = await prisma.membership.findMany({
+      where: { userId: user.id },
+      select: { workspaceId: true },
+    });
 
-  const selectedMembership = await prisma.membership.findFirst({
-    where: { userId: user.id, workspaceId },
-    include: { workspace: true },
-  });
+    if (memberships.length === 1) {
+      workspaceId = memberships[0].workspaceId;
+      setWorkspaceCookie(workspaceId);
+    } else {
+      // user must select workspace
+      redirect("/app/select-workspace");
+    }
+  }
 
-  if (!selectedMembership) return null;
-
-  const memberships = await prisma.membership.findMany({
-    where: { userId: user.id },
-    include: { workspace: true },
-    orderBy: { createdAt: "asc" },
-  });
-
-  return {
-    user,
-    workspaceId,
-    memberships: memberships.map((m) => ({
-      id: m.id,
-      role: m.role,
-      workspaceId: m.workspaceId,
-      workspace: { id: m.workspace.id, name: m.workspace.name, slug: m.workspace.slug },
-    })),
-    selectedMembership: {
-      id: selectedMembership.id,
-      role: selectedMembership.role,
-      workspaceId: selectedMembership.workspaceId,
-      workspace: {
-        id: selectedMembership.workspace.id,
-        name: selectedMembership.workspace.name,
-        slug: selectedMembership.workspace.slug,
-      },
-    },
-  };
+  return { user, workspaceId };
 }
