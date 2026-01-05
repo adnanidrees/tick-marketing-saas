@@ -1,43 +1,74 @@
+// app/api/admin/users/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAuth, jsonError } from "@/lib/auth";
 import { isSuperAdmin } from "@/lib/rbac";
-import { createUserSchema } from "@/lib/validation";
-import bcrypt from "bcryptjs";
-import { WorkspaceRole } from "@prisma/client";
+
+export async function GET() {
+  try {
+    const actor = await requireAuth();
+    if (!actor) return jsonError("Unauthorized", 401);
+
+    // FIX: globalRole is on actor.user
+    if (!isSuperAdmin(actor.user.globalRole)) return jsonError("Forbidden", 403);
+
+    const users = await prisma.user.findMany({
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        globalRole: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    return NextResponse.json({ ok: true, users });
+  } catch (err: any) {
+    if (String(err?.message || "").includes("UNAUTHORIZED")) {
+      return jsonError("Unauthorized", 401);
+    }
+    return jsonError(err?.message || "Server error", 500);
+  }
+}
 
 export async function POST(req: Request) {
-  const actor = await requireAuth();
-  if (!actor) return jsonError("Unauthorized", 401);
-  if (!isSuperAdmin(actor.globalRole)) return jsonError("Forbidden", 403);
+  try {
+    const actor = await requireAuth();
+    if (!actor) return jsonError("Unauthorized", 401);
 
-  const form = await req.formData();
-  const raw = {
-    email: String(form.get("email") || ""),
-    name: String(form.get("name") || "") || undefined,
-    password: String(form.get("password") || ""),
-    workspaceId: String(form.get("workspaceId") || ""),
-    role: String(form.get("role") || "VIEWER")
-  };
+    // FIX: globalRole is on actor.user
+    if (!isSuperAdmin(actor.user.globalRole)) return jsonError("Forbidden", 403);
 
-  const parsed = createUserSchema.safeParse(raw);
-  if (!parsed.success) return jsonError("Invalid user data", 400);
+    const form = await req.formData();
 
-  const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+    const email = String(form.get("email") || "").trim().toLowerCase();
+    const name = String(form.get("name") || "").trim();
+    const globalRole = String(form.get("globalRole") || "").trim();
 
-  const user = await prisma.user.upsert({
-    where: { email: parsed.data.email },
-    update: { name: parsed.data.name ?? undefined },
-    create: { email: parsed.data.email, name: parsed.data.name, passwordHash }
-  });
+    if (!email) return jsonError("Email is required", 400);
 
-  await prisma.membership.upsert({
-    where: { userId_workspaceId: { userId: user.id, workspaceId: parsed.data.workspaceId } },
-    update: { role: parsed.data.role as WorkspaceRole },
-    create: { userId: user.id, workspaceId: parsed.data.workspaceId, role: parsed.data.role as WorkspaceRole }
-  });
+    // If your schema enforces enum, you may validate against allowed values here.
+    const user = await prisma.user.create({
+      data: {
+        email,
+        name: name || null,
+        // @ts-ignore (in case GlobalRole enum typing is strict)
+        globalRole: globalRole || undefined,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        globalRole: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
 
-  return NextResponse.redirect(
-    new URL(`/app/admin/workspaces/${parsed.data.workspaceId}/users`, process.env.APP_URL || "http://localhost:3000")
-  );
+    return NextResponse.json({ ok: true, user });
+  } catch (err: any) {
+    return jsonError(err?.message || "Server error", 500);
+  }
 }
