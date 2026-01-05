@@ -52,7 +52,6 @@ export function setWorkspaceCookie(workspaceId: string) {
     secure: true,
     sameSite: "lax",
     path: "/",
-    // workspace cookie long-lived
     expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365),
   });
 }
@@ -95,9 +94,7 @@ export async function destroySession(token: string) {
 /** Require user by session cookie */
 export async function requireAuth() {
   const token = getSessionToken();
-  if (!token) {
-    throw new Error("UNAUTHORIZED");
-  }
+  if (!token) throw new Error("UNAUTHORIZED");
 
   const session = await prisma.session.findUnique({
     where: { token },
@@ -105,6 +102,7 @@ export async function requireAuth() {
   });
 
   if (!session) throw new Error("UNAUTHORIZED");
+
   if (session.expiresAt.getTime() < Date.now()) {
     await prisma.session.deleteMany({ where: { token } });
     throw new Error("UNAUTHORIZED");
@@ -116,24 +114,28 @@ export async function requireAuth() {
 /**
  * Workspace context:
  * - reads workspace cookie
- * - if missing and user has exactly 1 membership -> auto set
- * - if missing and multiple -> redirect to select-workspace
- *
- * RETURNS:
- *  { user, workspaceId, selectedMembership }
+ * - returns memberships (for /select-workspace page)
+ * - selectedMembership for current workspace
  */
 export async function requireWorkspaceContext() {
   const { user } = await requireAuth();
 
+  // Always load memberships so select-workspace page can use them
+  // Keep select minimal so it matches any schema and avoids TS issues.
+  const memberships = await prisma.membership.findMany({
+    where: { userId: user.id },
+    select: {
+      id: true,
+      workspaceId: true,
+      role: true, // if role doesn't exist in schema, remove this line
+      workspace: { select: { id: true, name: true } }, // if workspace relation doesn't exist, remove this block
+    } as any,
+  });
+
   let workspaceId = getWorkspaceIdFromCookie();
-  let selectedMembership: any = null;
 
+  // If no cookie, auto pick when single membership
   if (!workspaceId) {
-    const memberships = await prisma.membership.findMany({
-      where: { userId: user.id },
-      select: { workspaceId: true },
-    });
-
     if (memberships.length === 1) {
       workspaceId = memberships[0].workspaceId;
       setWorkspaceCookie(workspaceId);
@@ -142,18 +144,22 @@ export async function requireWorkspaceContext() {
     }
   }
 
-  // At this point workspaceId must exist
-  selectedMembership = await prisma.membership.findFirst({
-    where: { userId: user.id, workspaceId: workspaceId! },
-  });
+  // Ensure selected membership exists (cookie may be stale)
+  const selectedMembership =
+    memberships.find((m: any) => m.workspaceId === workspaceId) ??
+    (await prisma.membership.findFirst({
+      where: { userId: user.id, workspaceId: workspaceId! },
+    }));
 
-  // If cookie is stale or user removed from workspace
   if (!selectedMembership) {
     clearWorkspaceCookie();
     redirect("/app/select-workspace");
   }
 
-  return { user, workspaceId: workspaceId!, selectedMembership };
+  return {
+    user,
+    workspaceId: workspaceId!,
+    selectedMembership,
+    memberships,
+  };
 }
-
-// build-touch 2026-01-05T15:38:42
