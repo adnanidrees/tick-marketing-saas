@@ -1,9 +1,15 @@
-﻿import { NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
+/**
+ * Auth gate:
+ * - Only protect /app/*
+ * - Never intercept /api/* (so login POSTs and API calls work)
+ */
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
+  // Always allow Next internals + API routes
   if (
     pathname.startsWith("/api") ||
     pathname.startsWith("/_next") ||
@@ -12,6 +18,7 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Only /app/* is protected by matcher, but keep this as a safety check
   if (!pathname.startsWith("/app")) {
     return NextResponse.next();
   }
@@ -29,5 +36,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/app/:path*"]
+  matcher: ["/app/:path*"],
 };
