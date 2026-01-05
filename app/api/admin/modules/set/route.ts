@@ -1,35 +1,40 @@
+// app/api/admin/modules/set/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireAuth, jsonError } from "@/lib/auth";
 import { isSuperAdmin } from "@/lib/rbac";
-import { MODULES } from "@/lib/modules";
 
 export async function POST(req: Request) {
-  const actor = await requireAuth();
-  if (!actor) return jsonError("Unauthorized", 401);
-  if (!isSuperAdmin(actor.globalRole)) return jsonError("Forbidden", 403);
+  try {
+    const actor = await requireAuth(); // { user, session }
+    if (!actor) return jsonError("Unauthorized", 401);
 
-  const form = await req.formData();
-  const workspaceId = String(form.get("workspaceId") || "");
-  if (!workspaceId) return jsonError("workspaceId required", 400);
+    // FIX: globalRole is on actor.user
+    if (!isSuperAdmin(actor.user.globalRole)) return jsonError("Forbidden", 403);
 
-  const ws = await prisma.workspace.findUnique({ where: { id: workspaceId } });
-  if (!ws) return jsonError("Workspace not found", 404);
+    const form = await req.formData();
+    const workspaceId = String(form.get("workspaceId") || "");
+    const moduleKey = String(form.get("moduleKey") || "");
+    const enabledRaw = String(form.get("enabled") || "false");
 
-  const updates = MODULES.map((m) => {
-    const enabled = form.get(`module_${m.key}`) ? true : false;
-    return { moduleKey: m.key, enabled };
-  });
+    if (!workspaceId) return jsonError("workspaceId is required", 400);
+    if (!moduleKey) return jsonError("moduleKey is required", 400);
 
-  for (const u of updates) {
+    const enabled = enabledRaw === "true" || enabledRaw === "1" || enabledRaw === "on";
+
+    // Upsert workspace module enable/disable
     await prisma.workspaceModule.upsert({
-      where: { workspaceId_moduleKey: { workspaceId, moduleKey: u.moduleKey } },
-      update: { enabled: u.enabled },
-      create: { workspaceId, moduleKey: u.moduleKey, enabled: u.enabled }
+      where: { workspaceId_moduleKey: { workspaceId, moduleKey } },
+      update: { enabled },
+      create: { workspaceId, moduleKey, enabled },
     });
-  }
 
-  return NextResponse.redirect(
-    new URL(`/app/admin/workspaces/${workspaceId}/modules`, process.env.APP_URL || "http://localhost:3000")
-  );
+    return NextResponse.json({ ok: true });
+  } catch (err: any) {
+    // Normalize auth error
+    if (String(err?.message || "").includes("UNAUTHORIZED")) {
+      return jsonError("Unauthorized", 401);
+    }
+    return jsonError(err?.message || "Server error", 500);
+  }
 }
