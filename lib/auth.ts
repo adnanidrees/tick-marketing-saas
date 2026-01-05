@@ -148,3 +148,5 @@ export async function requireWorkspaceContext() {
 
   return { user, workspaceId };
 }
+
+// build-touch 2026-01-05T15:38:42
