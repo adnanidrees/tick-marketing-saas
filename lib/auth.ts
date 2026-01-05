@@ -3,13 +3,14 @@ import "server-only";
 
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { redirect } from "next/navigation";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/db";
 
 const SESSION_COOKIE = "tick_session";
 const WORKSPACE_COOKIE = "tick_workspace";
+
+const IS_PROD = process.env.NODE_ENV === "production";
 
 /** Standard JSON error helper */
 export function jsonError(message: string, status = 400) {
@@ -21,7 +22,6 @@ export async function hashPassword(password: string) {
   const salt = await bcrypt.genSalt(10);
   return bcrypt.hash(password, salt);
 }
-
 export async function verifyPassword(password: string, hash: string) {
   return bcrypt.compare(password, hash);
 }
@@ -30,7 +30,7 @@ export async function verifyPassword(password: string, hash: string) {
 export function setSessionCookie(token: string, expiresAt: Date) {
   cookies().set(SESSION_COOKIE, token, {
     httpOnly: true,
-    secure: true,
+    secure: IS_PROD, // dev: allow http
     sameSite: "lax",
     path: "/",
     expires: expiresAt,
@@ -40,7 +40,7 @@ export function setSessionCookie(token: string, expiresAt: Date) {
 export function clearSessionCookie() {
   cookies().set(SESSION_COOKIE, "", {
     httpOnly: true,
-    secure: true,
+    secure: IS_PROD,
     sameSite: "lax",
     path: "/",
     expires: new Date(0),
@@ -50,10 +50,10 @@ export function clearSessionCookie() {
 export function setWorkspaceCookie(workspaceId: string) {
   cookies().set(WORKSPACE_COOKIE, workspaceId, {
     httpOnly: true,
-    secure: true,
+    secure: IS_PROD,
     sameSite: "lax",
     path: "/",
-    // workspace cookie long-lived
+    // long-lived
     expires: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365),
   });
 }
@@ -61,7 +61,7 @@ export function setWorkspaceCookie(workspaceId: string) {
 export function clearWorkspaceCookie() {
   cookies().set(WORKSPACE_COOKIE, "", {
     httpOnly: true,
-    secure: true,
+    secure: IS_PROD,
     sameSite: "lax",
     path: "/",
     expires: new Date(0),
@@ -82,7 +82,6 @@ export async function createSession(userId: string) {
   const days = Number(process.env.SESSION_DAYS || 7);
   const expiresAt = new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
-  // Prisma model expected: session(token unique, userId, expiresAt)
   const session = await prisma.session.create({
     data: { token, userId, expiresAt },
   });
@@ -91,27 +90,41 @@ export async function createSession(userId: string) {
 }
 
 export async function destroySession(token: string) {
-  // safe delete
   await prisma.session.deleteMany({ where: { token } });
 }
 
-/** Require user by session cookie */
-export async function requireAuth() {
+/**
+ * ✅ IMPORTANT CHANGE:
+ * requireAuth() now returns null (no throw) to prevent runtime 500 on first visit.
+ */
+export async function requireAuth(): Promise<
+  | {
+      user: {
+        id: string;
+        email: string;
+        name: string | null;
+        globalRole: any;
+        createdAt: Date;
+        updatedAt: Date;
+        passwordHash: string;
+      };
+      session: any;
+    }
+  | null
+> {
   const token = getSessionToken();
-  if (!token) {
-    throw new Error("UNAUTHORIZED");
-  }
+  if (!token) return null;
 
   const session = await prisma.session.findUnique({
     where: { token },
     include: { user: true },
   });
 
-  if (!session) throw new Error("UNAUTHORIZED");
+  if (!session) return null;
 
   if (session.expiresAt.getTime() < Date.now()) {
     await prisma.session.deleteMany({ where: { token } });
-    throw new Error("UNAUTHORIZED");
+    return null;
   }
 
   return { user: session.user, session };
@@ -119,57 +132,46 @@ export async function requireAuth() {
 
 /**
  * Workspace context:
- * - reads workspace cookie
- * - if missing and user has exactly 1 membership -> auto set
- * - if missing and multiple -> redirect to select-workspace
- *
- * IMPORTANT:
- * - We include `workspace { id, name }` so UI can do `selectedMembership.workspace.name`
- * - We return `memberships` so select-workspace page can list options
+ * - returns memberships + selectedMembership(with workspace)
+ * - never throws; returns null if unauthenticated
  */
 export async function requireWorkspaceContext() {
-  const { user } = await requireAuth();
+  const auth = await requireAuth();
+  if (!auth) return null;
 
-  // Always load memberships WITH workspace so UI can show workspace.name safely
+  const { user } = auth;
+
   const memberships = await prisma.membership.findMany({
     where: { userId: user.id },
     include: {
-      workspace: { select: { id: true, name: true } },
+      workspace: {
+        select: { id: true, name: true, slug: true },
+      },
     },
+    orderBy: { createdAt: "asc" },
   });
 
   let workspaceId = getWorkspaceIdFromCookie();
 
-  if (!workspaceId) {
-    if (memberships.length === 1) {
-      workspaceId = memberships[0].workspaceId;
-      setWorkspaceCookie(workspaceId);
-    } else {
-      redirect("/app/select-workspace");
-    }
-  }
-
-  // Cookie may be stale; ensure membership exists for that workspace
+  // Find selected membership by cookie
   let selectedMembership =
-    memberships.find((m) => m.workspaceId === workspaceId) ?? null;
+    (workspaceId
+      ? memberships.find((m) => m.workspaceId === workspaceId)
+      : null) || null;
 
-  if (!selectedMembership) {
-    // last-resort DB check (still include workspace)
-    selectedMembership = await prisma.membership.findFirst({
-      where: { userId: user.id, workspaceId: workspaceId! },
-      include: { workspace: { select: { id: true, name: true } } },
-    });
-
-    if (!selectedMembership) {
-      clearWorkspaceCookie();
-      redirect("/app/select-workspace");
+  // Auto-select if only 1 membership
+  if (!selectedMembership && memberships.length === 1) {
+    selectedMembership = memberships[0] || null;
+    if (selectedMembership) {
+      workspaceId = selectedMembership.workspaceId;
+      setWorkspaceCookie(workspaceId);
     }
   }
 
   return {
     user,
-    workspaceId: workspaceId!,
-    selectedMembership,
     memberships,
+    workspaceId: selectedMembership?.workspaceId ?? null,
+    selectedMembership,
   };
 }

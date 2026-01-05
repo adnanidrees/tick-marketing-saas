@@ -17,7 +17,6 @@ const MODULES = [
 ];
 
 async function main() {
-  // ✅ Seed admin controlled by env
   const email = process.env.SEED_ADMIN_EMAIL || "admin@tick.com";
   const password = process.env.SEED_ADMIN_PASSWORD || "Admin@12345";
 
@@ -44,7 +43,6 @@ async function main() {
     },
   });
 
-  // Default workspace
   const ws = await prisma.workspace.upsert({
     where: { slug: "demo" },
     update: { name: "Demo Workspace" },
@@ -54,14 +52,9 @@ async function main() {
   await prisma.membership.upsert({
     where: { userId_workspaceId: { userId: admin.id, workspaceId: ws.id } },
     update: { role: WorkspaceRole.CLIENT_ADMIN },
-    create: {
-      userId: admin.id,
-      workspaceId: ws.id,
-      role: WorkspaceRole.CLIENT_ADMIN,
-    },
+    create: { userId: admin.id, workspaceId: ws.id, role: WorkspaceRole.CLIENT_ADMIN },
   });
 
-  // Enable core modules for demo
   for (const key of MODULES) {
     await prisma.workspaceModule.upsert({
       where: { workspaceId_moduleKey: { workspaceId: ws.id, moduleKey: key } },
