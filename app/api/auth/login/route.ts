@@ -18,12 +18,14 @@ export async function POST(req: Request) {
   if (!ok) return jsonError("Invalid credentials", 401);
 
   const session = await createSession(user.id);
-  setSessionCookie(session.token, session.expiresAt);
-
-  // auto-set workspace if only one membership
-  const memberships = await prisma.membership.findMany({ where: { userId: user.id } });
-  if (memberships.length === 1) setWorkspaceCookie(memberships[0].workspaceId);
 
   const res = NextResponse.redirect(new URL(next, process.env.APP_URL || "http://localhost:3000"));
+
+  // ✅ set cookies on THIS response
+  setSessionCookie(res, session.token, session.expiresAt);
+
+  const memberships = await prisma.membership.findMany({ where: { userId: user.id } });
+  if (memberships.length === 1) setWorkspaceCookie(res, memberships[0].workspaceId);
+
   return res;
 }
