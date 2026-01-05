@@ -80,6 +80,5 @@ main()
     await prisma.$disconnect();
   });
 console.log("Seed complete:");
-console.log("Admin:", email);
-console.log("Workspace:", ws.slug);
-
+console.log("Admin:", admin?.email ?? email ?? "(admin created)");
+console.log("Workspace:", (ws as any)?.name ?? (ws as any)?.slug ?? (ws as any)?.id ?? "(workspace created)");
