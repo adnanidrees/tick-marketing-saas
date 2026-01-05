@@ -6,7 +6,7 @@ import { isSuperAdmin } from "@/lib/rbac";
 
 export async function POST(req: Request) {
   try {
-    const actor = await requireAuth(); // { user, session }
+    const actor = await requireAuth();
     if (!actor) return jsonError("Unauthorized", 401);
 
     // FIX: globalRole is on actor.user
@@ -15,23 +15,23 @@ export async function POST(req: Request) {
     const form = await req.formData();
     const workspaceId = String(form.get("workspaceId") || "");
     const moduleKey = String(form.get("moduleKey") || "");
-    const enabledRaw = String(form.get("enabled") || "false");
+    const enabledRaw = String(form.get("enabled") || "");
 
     if (!workspaceId) return jsonError("workspaceId is required", 400);
     if (!moduleKey) return jsonError("moduleKey is required", 400);
 
-    const enabled = enabledRaw === "true" || enabledRaw === "1" || enabledRaw === "on";
+    const enabled =
+      enabledRaw === "true" || enabledRaw === "1" || enabledRaw === "on";
 
-    // Upsert workspace module enable/disable
-    await prisma.workspaceModule.upsert({
-      where: { workspaceId_moduleKey: { workspaceId, moduleKey } },
+    // Upsert (assumes unique(workspaceId, moduleKey) in schema)
+    const row = await prisma.workspaceModule.upsert({
+      where: { workspaceId_moduleKey: { workspaceId, moduleKey } } as any,
       update: { enabled },
       create: { workspaceId, moduleKey, enabled },
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, module: row });
   } catch (err: any) {
-    // Normalize auth error
     if (String(err?.message || "").includes("UNAUTHORIZED")) {
       return jsonError("Unauthorized", 401);
     }

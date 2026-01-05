@@ -1,31 +1,41 @@
+// app/api/auth/login/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { createSession, setSessionCookie, setWorkspaceCookie, jsonError, verifyPassword } from "@/lib/auth";
-import { loginSchema } from "@/lib/validation";
+import {
+  jsonError,
+  verifyPassword,
+  createSession,
+  setSessionCookie,
+} from "@/lib/auth";
 
 export async function POST(req: Request) {
-  const form = await req.formData();
-  const raw = { email: String(form.get("email") || ""), password: String(form.get("password") || "") };
-  const next = String(form.get("next") || "/app");
+  try {
+    const form = await req.formData();
+    const email = String(form.get("email") || "").trim().toLowerCase();
+    const password = String(form.get("password") || "");
 
-  const parsed = loginSchema.safeParse(raw);
-  if (!parsed.success) return jsonError("Invalid email/password format", 400);
+    if (!email || !password) return jsonError("Email and password are required", 400);
 
-  const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
-  if (!user) return jsonError("Invalid credentials", 401);
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) return jsonError("Invalid credentials", 401);
 
-  const ok = await verifyPassword(parsed.data.password, user.passwordHash);
-  if (!ok) return jsonError("Invalid credentials", 401);
+    const ok = await verifyPassword(password, user.passwordHash);
+    if (!ok) return jsonError("Invalid credentials", 401);
 
-  const session = await createSession(user.id);
+    const { token, expiresAt } = await createSession(user.id);
 
-  const res = NextResponse.redirect(new URL(next, process.env.APP_URL || "http://localhost:3000"));
+    // IMPORTANT: cookie must be set on the SAME response object returned
+    const res = NextResponse.redirect(new URL("/app", req.url));
+    res.cookies.set("tick_session", token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: "lax",
+      path: "/",
+      expires: expiresAt,
+    });
 
-  // ✅ set cookies on THIS response
-  setSessionCookie(res, session.token, session.expiresAt);
-
-  const memberships = await prisma.membership.findMany({ where: { userId: user.id } });
-  if (memberships.length === 1) setWorkspaceCookie(res, memberships[0].workspaceId);
-
-  return res;
+    return res;
+  } catch (err: any) {
+    return jsonError(err?.message || "Server error", 500);
+  }
 }
