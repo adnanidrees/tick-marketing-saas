@@ -1,4 +1,4 @@
-import { PrismaClient, GlobalRole, WorkspaceRole } from "@prisma/client";
+﻿import { PrismaClient, GlobalRole, WorkspaceRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
@@ -17,7 +17,7 @@ const MODULES = [
 ];
 
 async function main() {
-  const email = "admin@local";
+  const email = "admin@tick.com";
   const password = "Admin@12345";
   const passwordHash = await bcrypt.hash(password, 12);
 
@@ -67,3 +67,5 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+
+
