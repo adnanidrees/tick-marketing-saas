@@ -1,21 +1,38 @@
+// app/api/auth/select-workspace/route.ts
 import { NextResponse } from "next/server";
-import { requireAuth, setWorkspaceCookie, jsonError } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { requireAuth, jsonError, setWorkspaceCookie } from "@/lib/auth";
 
 export async function POST(req: Request) {
-  const user = await requireAuth();
-  if (!user) return jsonError("Unauthorized", 401);
+  try {
+    const actor = await requireAuth();
+    if (!actor) return jsonError("Unauthorized", 401);
 
-  const form = await req.formData();
-  const workspaceId = String(form.get("workspaceId") || "");
-  if (!workspaceId) return jsonError("workspaceId required", 400);
+    const body = await req.json().catch(() => ({} as any));
+    const workspaceId = String(body?.workspaceId || "").trim();
 
-  const membership = await prisma.membership.findUnique({
-    where: { userId_workspaceId: { userId: user.id, workspaceId } }
-  });
+    if (!workspaceId) return jsonError("workspaceId is required", 400);
 
-  if (!membership) return jsonError("Not a member of this workspace", 403);
+    const membership = await prisma.membership.findUnique({
+      where: {
+        userId_workspaceId: {
+          userId: actor.user.id, // FIX
+          workspaceId,
+        },
+      },
+    });
 
-  setWorkspaceCookie(workspaceId);
-  return NextResponse.redirect(new URL("/app", process.env.APP_URL || "http://localhost:3000"));
+    if (!membership) {
+      return jsonError("Not a member of this workspace", 403);
+    }
+
+    setWorkspaceCookie(workspaceId);
+
+    return NextResponse.json({ ok: true, workspaceId });
+  } catch (err: any) {
+    if (String(err?.message || "").includes("UNAUTHORIZED")) {
+      return jsonError("Unauthorized", 401);
+    }
+    return jsonError(err?.message || "Server error", 500);
+  }
 }
