@@ -1,4 +1,4 @@
-﻿import { PrismaClient, GlobalRole, WorkspaceRole } from "@prisma/client";
+import { PrismaClient, GlobalRole, WorkspaceRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
@@ -13,36 +13,47 @@ const MODULES = [
   "affiliate",
   "seo",
   "reputation",
-  "connectors"
+  "connectors",
 ];
 
 async function main() {
-  const email = "admin@tick.com";
-  const password = "Admin@12345";
+  // ✅ Seed admin now controlled by env
+  const email = process.env.SEED_ADMIN_EMAIL || "admin@tick.com";
+const password = process.env.SEED_ADMIN_PASSWORD || "Admin@12345";
+
+if (process.env.NODE_ENV === "production" && password === "Admin@12345") {
+  throw new Error("Refusing to seed with default password in production. Set SEED_ADMIN_PASSWORD.");
+}
+
   const passwordHash = await bcrypt.hash(password, 12);
 
   const admin = await prisma.user.upsert({
     where: { email },
-    update: {},
+    update: {
+      // password rotation possible (when you re-run seed with new password)
+      passwordHash,
+      globalRole: GlobalRole.SUPER_ADMIN,
+      name: "Super Admin",
+    },
     create: {
       email,
       name: "Super Admin",
       passwordHash,
-      globalRole: GlobalRole.SUPER_ADMIN
-    }
+      globalRole: GlobalRole.SUPER_ADMIN,
+    },
   });
 
   // Default workspace
   const ws = await prisma.workspace.upsert({
     where: { slug: "demo" },
-    update: {},
-    create: { name: "Demo Workspace", slug: "demo" }
+    update: { name: "Demo Workspace" },
+    create: { name: "Demo Workspace", slug: "demo" },
   });
 
   await prisma.membership.upsert({
     where: { userId_workspaceId: { userId: admin.id, workspaceId: ws.id } },
     update: { role: WorkspaceRole.CLIENT_ADMIN },
-    create: { userId: admin.id, workspaceId: ws.id, role: WorkspaceRole.CLIENT_ADMIN }
+    create: { userId: admin.id, workspaceId: ws.id, role: WorkspaceRole.CLIENT_ADMIN },
   });
 
   // Enable core modules for demo
@@ -50,7 +61,7 @@ async function main() {
     await prisma.workspaceModule.upsert({
       where: { workspaceId_moduleKey: { workspaceId: ws.id, moduleKey: key } },
       update: { enabled: true },
-      create: { workspaceId: ws.id, moduleKey: key, enabled: true }
+      create: { workspaceId: ws.id, moduleKey: key, enabled: true },
     });
   }
 
@@ -67,5 +78,3 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
-
-
