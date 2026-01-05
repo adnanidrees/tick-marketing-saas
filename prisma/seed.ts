@@ -78,3 +78,7 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+console.log("Seed complete:");
+console.log("Admin:", email);
+console.log("Workspace:", ws.slug);
+
